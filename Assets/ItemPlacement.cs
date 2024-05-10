@@ -4,17 +4,16 @@ using UnityEngine;
 
 public class ItemPlacement : MonoBehaviour
 {
-    // public GameObject block;
-    // public GameObject blockSmall;
     private RaycastInfo raycastInfoScript;
     private AudioManager am;
     private GameObject gm;
-    float[] gridSizes = new float[] { 1.5f, 0.5f };
     public GameObject[] uiPlacementHighlighters;
-    public int currentGridSizeIdx = 0;
+    public float gridSize = .5f;
 
     public GameObject[] blocks;
     public int currentBlockIdx = 0;
+
+    private Quaternion currentRotation = Quaternion.identity; // Added to keep track of the current rotation
 
     void Start()
     {
@@ -28,86 +27,95 @@ public class ItemPlacement : MonoBehaviour
         }
     }
 
-    void Update()
+        void Update()
     {
         if(MenuManager.gamePaused)
         {
             return;
         }
 
-        if (GetComponent<ModeSelection>().buildEnabled == false)
+        if (!GetComponent<ModeSelection>().buildEnabled)
         {
             foreach (var highlighter in uiPlacementHighlighters)
             {
                 highlighter.SetActive(false);
             }
             return;
-        } else {
-            foreach (var highlighter in uiPlacementHighlighters)
+        }
+
+        // Deactivate all highlighters first
+        foreach (var highlighter in uiPlacementHighlighters)
+        {
+            highlighter.SetActive(false);
+        }
+        
+        // Activate only the current highlighter
+        uiPlacementHighlighters[currentBlockIdx].SetActive(true);
+        
+        Vector3 placementPosition = GetPlacementPosition();
+        if (placementPosition != Vector3.zero) 
+        {
+            uiPlacementHighlighters[currentBlockIdx].transform.position = placementPosition;
+            // Update rotation for each child of the UI indicator
+            foreach (Transform child in uiPlacementHighlighters[currentBlockIdx].transform)
             {
-                highlighter.SetActive(false);
-            }
-            uiPlacementHighlighters[currentBlockIdx].SetActive(true);
-            
-            Vector3 placementPosition = GetPlacementPosition();
-            if (placementPosition != Vector3.zero) 
-            {
-                uiPlacementHighlighters[currentBlockIdx].transform.position = placementPosition;
+                child.localRotation = currentRotation; // Apply current rotation to UI indicator's child only
             }
         }
 
+        HandleRotation();
+
         if (Input.GetKeyDown(KeyCode.C))
         {
-            if (currentBlockIdx >= blocks.Length - 1)
-            {
-                currentBlockIdx = 0;
-            }
-            else
-            {
-                currentBlockIdx++;
-            }
+            currentBlockIdx = (currentBlockIdx + 1) % blocks.Length;
         }
 
         if (Input.GetKeyDown(KeyCode.Z))
         {
-            if (currentBlockIdx <= 0)
-            {
-                currentBlockIdx = blocks.Length -1;
-            }
-            else
-            {
-                currentBlockIdx--;
-            }
+            currentBlockIdx = (currentBlockIdx - 1 + blocks.Length) % blocks.Length;
         }
-
 
         if (Input.GetMouseButtonDown(0))
         {
             PlaceItem();
         }
+    }
 
-        if (currentBlockIdx >= 0) { // currently all blocks use same grid size. Useful if needing to snap to full size grid
-            currentGridSizeIdx = 1;
-        } else {
-            currentGridSizeIdx = 0;
+    private void HandleRotation()
+    {
+        float rotationStep = 90.0f;
+        if (Input.mouseScrollDelta.y != 0)
+        {
+            if (Input.GetMouseButton(1)) // Right mouse button held down
+            {
+                // Rotate around Z axis
+                currentRotation *= Quaternion.Euler(0, 0, Input.mouseScrollDelta.y * rotationStep);
+            }
+            else
+            {
+                // Rotate around Y axis
+                currentRotation *= Quaternion.Euler(0, Input.mouseScrollDelta.y * rotationStep, 0);
+            }
         }
     }
 
     private void PlaceItem()
     {
-        Debug.Log("Current Grid Size Index: " + gridSizes[currentGridSizeIdx]);
+        Debug.Log("Current Grid Size Index: " + gridSize);
 
         Vector3 placementPosition = GetPlacementPosition();
         if (placementPosition != Vector3.zero)
         {
             am.Play("Build");
-            var newBlock = Instantiate(blocks[currentBlockIdx], placementPosition, Quaternion.identity);
+            var newBlock = Instantiate(blocks[currentBlockIdx], placementPosition, Quaternion.identity); // Keep parent's rotation unchanged
             foreach (Transform child in newBlock.transform)
             {
                 child.GetComponent<Renderer>().material = gm.GetComponent<Data>().materials[GetComponent<MaterialSelector>().currentMaterialIdx].material;
+                child.localRotation = currentRotation; // Only rotate the child
             }
         }
     }
+
 
     private Vector3 GetPlacementPosition()
     {
@@ -118,39 +126,18 @@ public class ItemPlacement : MonoBehaviour
 
         Vector3 hitPoint = raycastInfoScript.hitInfo.point;
         Vector3 hitNormal = raycastInfoScript.hitInfo.normal.normalized;
-        float adjustedY = Mathf.Floor(hitPoint.y / gridSizes[currentGridSizeIdx]) * gridSizes[currentGridSizeIdx];
 
-        if (adjustedY < 0)
-        {
-            adjustedY = 0;
-        }
-        
-        // Initial grid-aligned position calculation
+        // Offset the hit point by the normal scaled by the desired distance
+        Vector3 offsetPoint = hitPoint + hitNormal * 0.25f; // Adjust by 0.25 units in the direction of the normal
+
+        // Snap the offset point to the nearest grid point considering the gridSize
         Vector3 gridAlignedPosition = new Vector3(
-            Mathf.Floor(hitPoint.x / gridSizes[currentGridSizeIdx]) * gridSizes[currentGridSizeIdx] + gridSizes[currentGridSizeIdx] / 2,
-            adjustedY,
-            Mathf.Floor(hitPoint.z / gridSizes[currentGridSizeIdx]) * gridSizes[currentGridSizeIdx] + gridSizes[currentGridSizeIdx] / 2
+            Mathf.Floor((offsetPoint.x + (gridSize / 2)) / gridSize) * gridSize,
+            Mathf.Floor((offsetPoint.y + (gridSize / 2)) / gridSize) * gridSize,
+            Mathf.Floor((offsetPoint.z + (gridSize / 2)) / gridSize) * gridSize
         );
-
-        // Detecting a vertical surface using the y component of the normal
-        if (Mathf.Abs(hitNormal.y) < 0.1f)
-        {
-            // Calculate the direction from the hit point towards the player, ignoring the y component
-            Vector3 directionTowardsPlayer = (transform.position - hitPoint).normalized;
-            Vector3 horizontalDirectionTowardsPlayer = new Vector3(directionTowardsPlayer.x, 0, directionTowardsPlayer.z).normalized;
-
-            gridAlignedPosition = hitPoint + horizontalDirectionTowardsPlayer * gridSizes[currentGridSizeIdx] / 2; // Adjust the addition to half the grid size
-
-            // Snap the new position to the grid
-            gridAlignedPosition = new Vector3(
-                Mathf.Floor(gridAlignedPosition.x / gridSizes[currentGridSizeIdx]) * gridSizes[currentGridSizeIdx] + gridSizes[currentGridSizeIdx] / 2,
-                adjustedY, // Y remains as calculated before
-                Mathf.Floor(gridAlignedPosition.z / gridSizes[currentGridSizeIdx]) * gridSizes[currentGridSizeIdx] + gridSizes[currentGridSizeIdx] / 2
-            );
-        }
 
         return gridAlignedPosition;
     }
-
 
 }
